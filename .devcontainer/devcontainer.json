@@ -1,0 +1,106 @@
+// Ambiente de desenvolvimento devcontainer.
+//
+// O ganho principal é qualidade de vida no desenvolvimento e aplicação de boas
+// práticas de desenvolvimento.
+//
+// - REPRODUTIBILIDADE: Um ambiente pronto e igual nas três plataformas. A base é
+// a mesma da imagem de produção (python:3.12-slim), então o que você exercita 
+// aqui é o que vai rodar lá. 
+//
+// - ISOLASOLAMENTO: Um ambiente isolado, sem cada um montar o seu na mão nem
+// depender do que já está instalado na máquina. O que roda aqui não interfere
+// no sistema hospedeiro nem o vice-versa.
+//
+// SEGURANÇA: Um lugar descartável para exercitar com entrada hostil os caminhos
+// que mexem em disco — apaga pasta, move arquivo, monta zip, sem apontar para a
+// própria máquina.
+{
+  "name": "FileSwift",
+  "build": {
+    "dockerfile": "Dockerfile.dev",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+
+  "features": {
+    // Cria o usuário não-root com sudo e instala um conjunto básico (git, curl,
+    // ca-certificates, zsh, etc), então nada disso precisa estar no Dockerfile.dev.
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "dev",
+      "installZsh": true,
+      "configureZshAsDefaultShell": true
+    },
+
+    // Põe o CLI do Claude Code na imagem, para o ambiente não depender do editor
+    // "ghcr.io/devcontainers/features/node:1": {},
+    // "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+
+    // Dá acesso ao Docker do host cuidando da permissão do socket.
+    // moby: false porque o python:3.12-slim é Debian trixie, que não tem os
+    // pacotes moby-*; assim a feature instala o docker-ce-cli do repositório do
+    // Docker. A alternativa seria pinar slim-bookworm, mas aí a imagem de dev
+    // deixaria de acompanhar a de produção.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    }
+  },
+
+  "mounts": [
+    // Commitar e dar push de dentro do container, sem copiar chave para cá.
+    "source=${localEnv:HOME}/.ssh,target=/home/dev/.ssh,type=bind,readonly",
+
+    // Volume para /data. Os dados do app ficam fora do workspace, para banco,
+    // uploads e anexos não sujarem o workspace e sobrevivem a rebuild do 
+    // container.
+    "source=fileswift-data,target=/data,type=volume",
+
+    // Guarda o histórico e o login do Claude Code, que morrem no rebuild junto
+    // com o home do container.
+    //
+    // O CLAUDE_CONFIG_DIR abaixo precisa apontar para cá. Sem ele o ~/.claude.json
+    // fica fora desta pasta, e é nele que estão a conta e o trust do projeto — ou
+    // seja, você reloga a cada rebuild.
+    "source=fileswift-claude,target=/home/dev/.claude,type=volume"
+  ],
+
+  // Dá as duas pastas para o usuário dev, senão ele não consegue escrever nelas.
+  // O /data troca de dono quando o UID do dev é ajustado para o do host. O volume
+  // do Claude nasce como root, porque volume vazio sempre nasce assim.
+  "postCreateCommand": "sudo chown dev:dev /data /home/dev/.claude",
+
+  // Os dois porque cada um cobre um caminho. O forwardPorts só vale dentro do
+  // vscode. O appPort é o que publica a porta de verdade, e funciona também
+  // quando o container sobe pela linha de comando.
+  //
+  // A porta fica aberta para a rede, não só para localhost. É de propósito: o app
+  // existe para ser aberto no celular da mesma rede, e é para isso que o
+  // gui_launcher gera o QR code.
+  "forwardPorts": [5678],
+  "appPort": [5678],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/dev/.claude",
+
+    // Guarda o caminho da pasta do projeto no host. O docker-compose.yml usa
+    // essa variável para montar código no container de teste: quem executa o
+    // mount é o Docker do host, e ele não conhece o /workspace daqui de dentro.
+    "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
+  },
+
+  // Caso alguem use Claude Code sandboxed. O custo é baixo e aceitável, sem o
+  // filtro de syscalls, código hostil executado aqui passa a poder tentar
+  // exploit de kernel, a questão é que o socket do Docker do host já está montado
+  // acima, e ele é um caminho mais curto que qualquer syscall.
+  "runArgs": ["--security-opt", "seccomp=unconfined"],
+
+  // Roda como dev, não como root. O motivo é prático, o /workspace é a sua pasta
+  // do projeto montada aqui dentro, então arquivo criado no container aparece
+  // direto no seu computador. Como root, ele sairia com dono root e você
+  // precisaria de sudo para mexer no seu próprio código.
+  //
+  // No Linux o devcontainer ajusta sozinho o UID do dev para o mesmo do seu 
+  // usuário no host, então os donos batem sem você fazer nada. Ainda assim, é
+  // possível usar sudo, então apt, pip e afins funcionam normal.
+  "remoteUser": "dev"
+}
